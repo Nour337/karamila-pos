@@ -1,0 +1,12 @@
+{
+  "name": "karamila-pos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Karamila barbershop POS + admin dashboard (PWA, Google Sheets backend)",
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/input.css -o ./styles.css --minify",
+    "watch:css": "tailwindcss -i ./src/input.css -o ./styles.css --watch",
+    "test": "node test/backend.test.js"
+  },
+  "devDependencies": { "tailwindcss": "3.4.19" }
+}

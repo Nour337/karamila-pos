@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Karamila POS</title>
+  <meta name="description" content="Karamila barbershop POS & manager dashboard">
+  <meta name="theme-color" content="#0F172A">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Karamila">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="h-full bg-slate-900 text-slate-50 antialiased select-none">
+  <div id="app" class="min-h-full">
+    <div class="flex h-screen items-center justify-center text-amber-500">Loading Karamila…</div>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toasts" class="pointer-events-none fixed inset-x-0 top-3 z-[60] flex flex-col items-center gap-2 px-3"></div>
+  <noscript>Karamila POS needs JavaScript enabled.</noscript>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
