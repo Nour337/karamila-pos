@@ -1,6 +1,6 @@
 /** Rebuild CSS after editing classes:  npm run build:css */
 module.exports = {
-  content: ['./index.html', './app.js'],
+  content: ['./index.html', './app.js', './rewards.html', './rewards.js', './i18n.js'],
   theme: {
     extend: {
       keyframes: {

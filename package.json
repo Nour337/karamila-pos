@@ -6,7 +6,12 @@
   "scripts": {
     "build:css": "tailwindcss -i ./src/input.css -o ./styles.css --minify",
     "watch:css": "tailwindcss -i ./src/input.css -o ./styles.css --watch",
-    "test": "node test/backend.test.js"
+    "test": "node test/backend.test.js && node test/loyalty.test.js"
   },
-  "devDependencies": { "tailwindcss": "3.4.19" }
+  "devDependencies": {
+    "tailwindcss": "3.4.19"
+  },
+  "dependencies": {
+    "terser": "^5.51.2"
+  }
 }

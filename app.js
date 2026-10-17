@@ -7,7 +7,7 @@
 
 const CFG = Object.assign({ API_URL: '', TIME_ZONE: 'Africa/Cairo', SYNC_SECONDS: 15 }, window.KARAMILA_CONFIG || {});
 const TZ = CFG.TIME_ZONE;
-const VERSION = '1.0.0';
+const VERSION = '1.2.0';
 
 const METHODS = {
   CASH:          { label: 'Cash',          short: 'Cash',     btn: 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-400' },
@@ -88,6 +88,10 @@ const ICONS = {
   chair: '<path d="M7 18v3M17 18v3M5 11V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v6"/><path d="M3 11h18v4a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"/>',
   receipt: '<path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 .67V2l-1 .67L16 1l-3 2-3-2-3 2-3-1z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   install: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', back: '<path d="M15 18l-6-6 6-6"/>',
+  gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/>',
+  qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/>',
+  send: '<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>', copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  print: '<path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
 };
 const ic = (n, c = 'h-5 w-5') => `<svg class="${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
@@ -110,6 +114,7 @@ const S = {
   custQuery: '',
   dash: { range: LS.get('dashRange', 'today'), from: '', to: '', data: null, loading: false, error: '' },
   logFilter: { barber: '', method: '', status: '', q: '' },
+  loy: { data: null, loading: false, error: '', q: '', tab: 'customers' },
   installPrompt: null,
 };
 
@@ -173,8 +178,9 @@ async function flushOutbox() {
 
 function afterOp(op, res) {
   if (op.action === 'checkout' && res && res.duplicate) return;
+  if (op.action === 'checkout' && res && res.rewardError) toast(`Loyalty reward not applied: ${res.rewardError} The sale was sent to the manager for approval.`, 'error', 12000);
   if (op.action === 'saveCustomer' && res && res.customer) upsertLocalCustomer(res.customer);
-  if ((op.action === 'checkout' || op.action === 'openTicket') && op.data.customer && op.data.customer.name) refreshCustomers();
+  if ((op.action === 'checkout' || op.action === 'openTicket') && op.data.customer) refreshCustomers();
   if (op.action === 'addExpense' && S.role === 'MANAGER' && ['expenses', 'dashboard'].includes(S.view)) loadDash(true);
 }
 
@@ -216,7 +222,10 @@ function setLive(d, prime) {
 }
 
 async function refreshCustomers() {
-  try { const d = await api('listCustomers'); S.boot.customers = d.customers; LS.set('boot', S.boot); } catch (e) { /* later */ }
+  try {
+    const d = await api('listCustomers'); S.boot.customers = d.customers; LS.set('boot', S.boot);
+    if (S.view === 'pos' && S.cart.customer && !S.cart.customer.isNew) renderCustomer();
+  } catch (e) { /* later */ }
 }
 
 function notifyDecisions(prime) {
@@ -270,7 +279,24 @@ function upsertLocalCustomer(c) {
 }
 
 /* ------------------------------ cart ------------------------------ */
-const newCart = (barberId = null) => ({ id: uid('T'), barberId, items: [], customer: null, discount: null, loaded: false, createdAt: null });
+const newCart = (barberId = null) => ({ id: uid('T'), barberId, items: [], customer: null, discount: null, reward: null, loaded: false, createdAt: null });
+
+/* ---- loyalty (same rules as the server; the server re-validates everything) ---- */
+const loyCfg = () => (S.boot && S.boot.settings && S.boot.settings.loyalty) || { active: false, required: 5, type: 'PERCENT', value: 50, services: [] };
+const rewardLabel = (r) => (r.type === 'FIXED' ? `${fmt(r.value)} off` : `${num(r.value)}% off`);
+function rewardLine(lines) {
+  const set = new Set(loyCfg().services || []);
+  let best = null;
+  lines.forEach((l, k) => { if (l.type !== 'PRODUCT' && set.has(l.id) && (!best || l.price > best.price)) best = { ...l, index: k }; });
+  return best;
+}
+function rewardAmountFor(r, lines) {
+  const l = rewardLine(lines);
+  if (!r || !l) return { amount: 0, line: null };
+  const amt = r.type === 'FIXED' ? Math.min(num(r.value), l.price) : (l.price * num(r.value)) / 100;
+  return { amount: r2(Math.max(0, Math.min(l.price, amt))), line: l };
+}
+const custLoyalty = (c) => (c && c.loyalty) || null;
 S.cart = newCart();
 
 function cartTotals() {
@@ -278,8 +304,17 @@ function cartTotals() {
   let sub = 0;
   const lines = S.cart.items.filter((i) => cat[i.id]).map((i) => { const c = cat[i.id]; const amount = r2(c.price * i.qty); sub += amount; return { ...i, name: c.name, price: c.price, type: c.type, amount }; });
   sub = r2(sub);
-  const discount = S.cart.discount ? Math.min(r2(S.cart.discount.amount), sub) : 0;
-  return { lines, sub, discount, total: r2(sub - discount), count: lines.reduce((a, l) => a + l.qty, 0) };
+  const rw = S.cart.reward ? rewardAmountFor(S.cart.reward, lines) : { amount: 0, line: null };
+  const loyalty = Math.min(rw.amount, sub);
+  const manual = S.cart.discount ? Math.min(r2(S.cart.discount.amount), r2(sub - loyalty)) : 0;
+  const discount = r2(loyalty + manual);
+  return { lines, sub, loyalty, rewardLine: rw.line, manual, discount, total: r2(sub - discount), count: lines.reduce((a, l) => a + l.qty, 0) };
+}
+function cartNeedsApproval(t) {
+  if (S.role === 'MANAGER') return false;
+  const c = S.cart;
+  if (c.discount && t.manual > 0 && !c.discount.approvalToken) return true;
+  return !!(c.reward && t.loyalty > 0 && loyCfg().needsApproval && !(c.reward.approvalToken && c.reward.approvedAmount === t.loyalty));
 }
 const itemsText = (lines) => lines.map((l) => (l.qty > 1 ? `${l.name} ×${l.qty}` : l.name)).join(', ');
 function custPayload() {
@@ -290,7 +325,7 @@ function custPayload() {
 function loadTicketIntoCart(t) {
   const cat = catalogMap();
   S.cart = {
-    id: t.id, barberId: t.barberId, loaded: true, createdAt: t.createdAt, discount: null,
+    id: t.id, barberId: t.barberId, loaded: true, createdAt: t.createdAt, discount: null, reward: null,
     items: (t.items || []).filter((i) => cat[i.id]).map((i) => ({ id: i.id, qty: i.qty || 1 })),
     customer: t.customerId ? (customerById(t.customerId) || { id: t.customerId, name: t.customerName, phone: t.customerPhone }) : null,
   };
@@ -304,6 +339,7 @@ const NAV = [
   { id: 'payroll', label: 'Payroll', icon: 'users', roles: ['MANAGER'] },
   { id: 'expenses', label: 'Expenses', icon: 'wallet', roles: ['CASHIER', 'MANAGER'] },
   { id: 'approvals', label: 'Approvals', icon: 'shield', roles: ['MANAGER'] },
+  { id: 'loyalty', label: 'Loyalty', icon: 'gift', roles: ['MANAGER'] },
   { id: 'settings', label: 'Settings', icon: 'cog', roles: ['MANAGER'] },
 ];
 const MGR_DATA_VIEWS = ['dashboard', 'log', 'payroll', 'expenses', 'approvals'];
@@ -373,8 +409,9 @@ function renderView() {
   const v = $('#view');
   if (!v) return;
   if (!S.boot) { v.innerHTML = `<div class="grid h-[60vh] place-items-center text-slate-400">${S.online ? 'Loading data…' : 'No connection — connect once to load the shop data.'}</div>`; return; }
-  ({ pos: renderPOS, dashboard: renderDashboard, log: renderLog, payroll: renderPayroll, expenses: renderExpenses, approvals: renderApprovals, settings: renderSettings }[S.view] || renderPOS)();
+  ({ pos: renderPOS, dashboard: renderDashboard, log: renderLog, payroll: renderPayroll, expenses: renderExpenses, approvals: renderApprovals, settings: renderSettings, loyalty: renderLoyalty }[S.view] || renderPOS)();
   if (S.role === 'MANAGER' && MGR_DATA_VIEWS.includes(S.view) && !S.dash.data && !S.dash.loading) loadDash();
+  if (S.role === 'MANAGER' && S.view === 'loyalty' && !S.loy.data && !S.loy.loading && !S.loy.error) loadLoyalty();
 }
 
 function refreshLiveUI() {
@@ -529,7 +566,7 @@ function renderCustomer() {
       </div>
       ${!c.isNew ? `<button data-act="edit-notes" class="rounded-lg p-2 text-slate-400 hover:bg-slate-700" title="Preferences">${ic('edit', 'h-4 w-4')}</button>` : ''}
       <button data-act="clear-customer" class="rounded-lg p-2 text-slate-400 hover:bg-slate-700" title="Remove">${ic('x', 'h-4 w-4')}</button>
-    </div>`;
+    </div>${c.isNew ? newCustomerLoyaltyNote() : loyaltyStrip(full)}`;
     return;
   }
   el.innerHTML = `<div class="relative">
@@ -539,6 +576,43 @@ function renderCustomer() {
     <div id="cust-dd" class="absolute inset-x-0 top-full z-20 mt-1"></div>
   </div>`;
   renderCustDropdown();
+}
+
+function progressDots(progress, required, cls = 'h-3 w-3') {
+  if (required > 12) return `<div class="h-2 w-full rounded-full bg-slate-700"><div class="h-2 rounded-full bg-amber-500" style="width:${Math.round((progress / required) * 100)}%"></div></div>`;
+  return `<span class="inline-flex flex-wrap gap-1">${Array.from({ length: required }, (_, i) => `<span class="${cls} rounded-full ${i < progress ? 'bg-amber-500' : 'bg-slate-700 ring-1 ring-white/10'}"></span>`).join('')}</span>`;
+}
+function newCustomerLoyaltyNote() {
+  const L = loyCfg();
+  if (!L.active) return '';
+  return `<div class="mt-2 flex items-center gap-2 rounded-2xl bg-slate-800/40 px-3 py-2 text-xs text-slate-400 ring-1 ring-white/5">${ic('gift', 'h-4 w-4 text-amber-400')}<span>Joins the rewards program automatically with this visit.</span></div>`;
+}
+function loyaltyStrip(c) {
+  const L = loyCfg();
+  const lo = custLoyalty(c);
+  if (!lo || (!L.active && !lo.available.length)) return '';
+  const applied = S.cart.reward;
+  const t = cartTotals();
+  return `<div class="mt-2 rounded-2xl bg-slate-800/40 p-3 ring-1 ring-white/5">
+    <div class="flex items-center gap-2">
+      ${ic('gift', 'h-4 w-4 shrink-0 text-amber-400')}
+      <span class="text-xs font-semibold text-slate-300">Rewards</span>
+      <span class="text-xs text-slate-400">${lo.progress}/${lo.required}</span>
+      ${progressDots(lo.progress, lo.required)}
+      <button data-act="loy-card" data-id="${esc(c.id)}" class="ml-auto flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-slate-300 hover:bg-slate-700" title="Rewards card">${ic('qr', 'h-4 w-4')} Card</button>
+    </div>
+    ${!L.active ? '<div class="mt-1 text-xs text-slate-500">Program paused — visits are not counted.</div>'
+      : lo.remaining > 0 && !lo.available.length ? `<div class="mt-1 text-xs text-slate-400">${lo.remaining} more visit${lo.remaining === 1 ? '' : 's'} to the next reward</div>` : ''}
+    ${lo.available.map((r) => {
+      const on = applied && applied.id === r.id;
+      return `<div class="mt-2 flex items-center gap-2 rounded-xl ${on ? 'bg-emerald-500/15 ring-1 ring-emerald-500/40' : 'bg-amber-500/10 ring-1 ring-amber-500/40'} px-3 py-2">
+        <span class="text-lg">🎁</span>
+        <div class="min-w-0 flex-1"><div class="text-sm font-bold ${on ? 'text-emerald-300' : 'text-amber-300'}">${on ? 'Reward applied' : 'Reward available!'} · ${esc(rewardLabel(r))}</div>
+          <div class="text-[11px] text-slate-400">${on && t.rewardLine ? `On ${esc(t.rewardLine.name)}` : 'On the next haircut'}${r.expiresOn ? ` · expires ${esc(fmtDay(r.expiresOn))}` : ''}</div></div>
+        ${on ? `<button data-act="remove-reward" class="btn-ghost px-3 py-1.5 text-xs">Remove</button>` : `<button data-act="apply-reward" data-id="${esc(r.id)}" class="btn-primary px-3 py-1.5 text-xs">Apply</button>`}
+      </div>`;
+    }).join('')}
+  </div>`;
 }
 
 function searchCustomers(q) {
@@ -563,7 +637,7 @@ function renderCustDropdown() {
     ${res.map((c) => `<button data-act="pick-customer" data-id="${esc(c.id)}" class="flex w-full items-center gap-3 border-b border-white/5 px-4 py-3 text-left hover:bg-slate-700">
       <span class="flex-1"><span class="font-medium">${esc(c.name)}</span> <span class="text-sm text-slate-400">${esc(c.phone)}</span>
       ${c.notes ? `<span class="block truncate text-xs text-amber-300/80">★ ${esc(c.notes)}</span>` : ''}</span>
-      <span class="text-xs text-slate-400">${c.visits} visits</span></button>`).join('')}
+      <span class="text-xs text-slate-400">${c.loyalty && c.loyalty.available && c.loyalty.available.length ? '🎁 ' : ''}${c.visits} visits</span></button>`).join('')}
     <div class="grid gap-2 p-3 sm:grid-cols-[1fr_1fr_auto]">
       <input id="new-name" class="inp" placeholder="New customer name" value="${isPhone ? '' : esc(q)}">
       <input id="new-phone" class="inp" placeholder="Phone 01xxxxxxxxx" inputmode="tel" value="${isPhone ? esc(q) : ''}">
@@ -590,7 +664,7 @@ function renderGrid() {
 
 function payButtons(t, compact) {
   const ready = S.cart.barberId && t.lines.length;
-  const needsApproval = S.cart.discount && t.discount > 0 && S.role !== 'MANAGER' && !S.cart.discount.approvalToken;
+  const needsApproval = cartNeedsApproval(t);
   return Object.entries(METHODS).map(([k, m]) => `<button data-act="pay" data-method="${k}" class="${m.btn} ${ready ? '' : 'opacity-40'} flex ${compact ? 'h-14' : 'h-16'} flex-col items-center justify-center rounded-2xl px-2 font-bold text-white shadow-lg transition active:scale-95">
     <span class="${compact ? 'text-sm' : 'text-base'} leading-tight">${m.short}</span>
     <span class="text-[10px] font-medium opacity-80">${needsApproval ? 'Send for approval' : 'Pay & Save'}</span></button>`).join('');
@@ -602,7 +676,8 @@ function renderCart() {
   const t = cartTotals();
   const b = barberById(S.cart.barberId);
   const disc = S.cart.discount;
-  const needsApproval = disc && t.discount > 0 && S.role !== 'MANAGER' && !disc.approvalToken;
+  const needsApproval = disc && t.manual > 0 && S.role !== 'MANAGER' && !disc.approvalToken;
+  const rwNeeds = S.cart.reward && t.loyalty > 0 && cartNeedsApproval(t) && !needsApproval;
   el.innerHTML = `<div class="rounded-3xl bg-slate-800/80 p-4 ring-1 ring-white/5">
     <div class="mb-3 flex items-center gap-3">
       ${b ? avatar(b, 'h-10 w-10 text-sm') : `<span class="grid h-10 w-10 place-items-center rounded-full bg-slate-700 text-slate-400">${ic('chair', 'h-5 w-5')}</span>`}
@@ -622,8 +697,12 @@ function renderCart() {
     </div>
     <div class="mt-3 space-y-1 border-t border-white/5 pt-3 text-sm">
       <div class="flex justify-between text-slate-400"><span>Subtotal</span><span>${fmt(t.sub)}</span></div>
+      ${S.cart.reward ? (t.loyalty > 0 ? `<div class="flex items-center justify-between text-emerald-300">
+        <span class="flex items-center gap-1">${ic('gift', 'h-3.5 w-3.5')} Loyalty reward ${esc(rewardLabel(S.cart.reward))}${rwNeeds ? ' (needs approval)' : ''} <button data-act="remove-reward" class="ml-1 text-slate-400 hover:text-white">${ic('x', 'h-3.5 w-3.5')}</button></span><span>− ${fmt(t.loyalty)}</span></div>
+        <div class="text-[11px] text-slate-500">${esc(t.rewardLine.name)}: ${fmt(t.rewardLine.price)} → ${fmt(r2(t.rewardLine.price - t.loyalty))}</div>`
+        : `<div class="flex items-center justify-between text-amber-300"><span class="flex items-center gap-1">${ic('gift', 'h-3.5 w-3.5')} Add a haircut to use the reward <button data-act="remove-reward" class="ml-1 text-slate-400 hover:text-white">${ic('x', 'h-3.5 w-3.5')}</button></span></div>`) : ''}
       ${disc ? `<div class="flex items-center justify-between ${needsApproval ? 'text-amber-300' : 'text-emerald-300'}">
-        <span class="flex items-center gap-1">${ic('tag', 'h-3.5 w-3.5')} Discount ${needsApproval ? '(needs approval)' : '(approved)'} <button data-act="remove-discount" class="ml-1 text-slate-400 hover:text-white">${ic('x', 'h-3.5 w-3.5')}</button></span><span>− ${fmt(t.discount)}</span></div>` : ''}
+        <span class="flex items-center gap-1">${ic('tag', 'h-3.5 w-3.5')} Discount ${needsApproval ? '(needs approval)' : '(approved)'} <button data-act="remove-discount" class="ml-1 text-slate-400 hover:text-white">${ic('x', 'h-3.5 w-3.5')}</button></span><span>− ${fmt(t.manual)}</span></div>` : ''}
       <div class="flex items-end justify-between pt-1"><span class="font-semibold">Total</span><span class="text-3xl font-extrabold text-amber-400">${fmt(t.total)}</span></div>
     </div>
     <div class="mt-3 grid grid-cols-2 gap-2">
@@ -661,9 +740,10 @@ function changeQty(id, delta) {
   else if (delta > 0) S.cart.items.push({ id, qty: 1 });
   if (S.cart.discount && S.cart.discount.approvalToken) {
     const t = cartTotals();
-    if (t.sub < S.cart.discount.amount) { S.cart.discount = null; toast('Discount removed — bill is now smaller than the discount.', 'warn'); }
+    if (r2(t.sub - t.loyalty) < S.cart.discount.amount) { S.cart.discount = null; toast('Discount removed — bill is now smaller than the discount.', 'warn'); }
   }
   renderGrid(); renderCart();
+  if (S.cart.reward) renderCustomer();
 }
 
 function viewForCart(extra) {
@@ -672,7 +752,7 @@ function viewForCart(extra) {
   return Object.assign({ id: S.cart.id, barberId: S.cart.barberId, barberName: b ? b.name : '', customerId: S.cart.customer ? S.cart.customer.id : '',
     customerName: S.cart.customer ? S.cart.customer.name : '', customerPhone: S.cart.customer ? S.cart.customer.phone : '',
     items: t.lines.map((l) => ({ id: l.id, name: l.name, price: l.price, qty: l.qty, type: l.type })), itemsText: itemsText(t.lines),
-    subtotal: t.sub, discount: t.discount, total: t.total, createdAt: S.cart.createdAt || new Date().toISOString() }, extra || {});
+    subtotal: t.sub, discount: t.discount, loyaltyDiscount: t.loyalty, rewardId: S.cart.reward && t.loyalty > 0 ? S.cart.reward.id : '', total: t.total, createdAt: S.cart.createdAt || new Date().toISOString() }, extra || {});
 }
 
 function seat() {
@@ -698,19 +778,33 @@ function pay(method) {
   if (!c.barberId) return toast('Select a barber first', 'warn');
   const t = cartTotals();
   if (!t.lines.length) return toast('Add a service or product', 'warn');
-  const needsApproval = c.discount && t.discount > 0 && S.role !== 'MANAGER' && !c.discount.approvalToken;
+  if (c.reward && !(t.loyalty > 0)) return toast('Add a haircut to use the reward, or remove the reward', 'warn');
+  const needsApproval = cartNeedsApproval(t);
   const view = viewForCart({ method, status: needsApproval ? 'PENDING' : 'PAID', closedAt: new Date().toISOString(), date: todayStr() });
   enqueue('checkout', {
     id: c.id, barberId: c.barberId, method,
     items: c.items.map((i) => ({ id: i.id, qty: i.qty })),
     customer: custPayload(),
-    discount: c.discount && t.discount > 0 ? { amount: t.discount, reason: c.discount.reason || '', approvalToken: c.discount.approvalToken || '' } : null,
+    discount: c.discount && t.manual > 0 ? { amount: t.manual, reason: c.discount.reason || '', approvalToken: c.discount.approvalToken || '' } : null,
+    rewardId: c.reward && t.loyalty > 0 ? c.reward.id : '',
+    rewardAmount: c.reward && t.loyalty > 0 ? t.loyalty : 0,
+    rewardApproval: c.reward && c.reward.approvalToken ? c.reward.approvalToken : '',
     _view: view,
   });
   if (c.customer) {
     if (c.customer.isNew) markCustomerSaved();
     const lc = customerById(c.customer.id);
-    if (lc && !needsApproval) { lc.visits = num(lc.visits) + 1; lc.totalSpent = num(lc.totalSpent) + t.total; lc.lastVisit = todayStr(); lc.lastItems = view.itemsText; lc.favBarberId = c.barberId; LS.set('boot', S.boot); }
+    if (lc && !needsApproval) {
+      lc.visits = num(lc.visits) + 1; lc.totalSpent = num(lc.totalSpent) + t.total; lc.lastVisit = todayStr(); lc.lastItems = view.itemsText; lc.favBarberId = c.barberId;
+      const lo = lc.loyalty;
+      if (lo) {   // optimistic — the server's numbers replace this on the next sync
+        if (c.reward) { lo.available = lo.available.filter((r) => r.id !== c.reward.id); lo.redeemed = num(lo.redeemed) + 1; }
+        else if (loyCfg().active && rewardLine(t.lines)) { lo.total++; lo.progress = Math.min(lo.required, lo.progress + 1); lo.remaining = Math.max(0, lo.required - lo.progress); }
+      }
+      LS.set('boot', S.boot);
+    }
+    if (c.reward) toast(`🎁 Reward redeemed for ${c.customer.name} — new cycle started`, 'success', 4000);
+    else if (lc && lc.loyalty && loyCfg().active && rewardLine(t.lines) && lc.loyalty.progress >= lc.loyalty.required) toast(`🎉 ${lc.name} just unlocked a reward! Send the card on WhatsApp.`, 'success', 6000);
   }
   flash(needsApproval ? 'Sent for approval' : 'Saved', `${fmt(t.total)} · ${METHODS[method].label}`, needsApproval);
   S.cart = newCart(); S.custQuery = '';
@@ -869,7 +963,7 @@ function renderDashboard() {
       ${kpi('Commissions', fmt(s.commission), `Shop cut ${fmt(s.shopCut)}`)}
       ${kpi('Expenses', fmt(s.expenses), `Variable ${money(s.expensesVariable)} · Fixed ${money(s.expensesFixed)}`)}
       ${Object.entries(METHODS).map(([k, m]) => kpi(`<span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full ${m.dot}"></span>${m.label}</span>`, fmt(s.byMethod[k]), s.revenue ? Math.round((s.byMethod[k] / s.revenue) * 100) + '% of revenue' : '')).join('')}
-      ${kpi('Services / Products', `${money(s.services)} <span class="text-base text-slate-500">/</span> ${money(s.products)}`, `Discounts ${fmt(s.discounts)}${s.voidCount ? ` · ${s.voidCount} voided` : ''}`)}
+      ${kpi('Services / Products', `${money(s.services)} <span class="text-base text-slate-500">/</span> ${money(s.products)}`, `Discounts ${fmt(s.discounts)}${s.loyaltyDiscounts ? ` · Loyalty ${fmt(s.loyaltyDiscounts)}` : ''}${s.voidCount ? ` · ${s.voidCount} voided` : ''}`)}
     </div>
     <section class="mt-6">
       <h2 class="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-widest text-slate-400"><span class="h-2 w-2 animate-pulse rounded-full bg-emerald-400"></span> Live chairs</h2>
@@ -919,7 +1013,7 @@ function logTable(rows, withActions) {
     <tbody class="divide-y divide-white/5 bg-slate-800/40">${rows.map((t) => `<tr class="${t.status === 'VOID' ? 'opacity-50' : ''}">
       <td class="whitespace-nowrap px-3 py-2.5 text-slate-400">${multiDay ? esc(fmtDay(t.date)) + ' ' : ''}${fmtTime(t.closedAt)}</td>
       <td class="whitespace-nowrap px-3 py-2.5 font-medium">${esc(t.barberName)}</td>
-      <td class="px-3 py-2.5"><div>${esc(t.itemsText)}</div>${t.customerName ? `<div class="text-xs text-slate-500">${esc(t.customerName)}</div>` : ''}${t.discount ? `<div class="text-xs text-amber-300">−${fmt(t.discount)} discount</div>` : ''}</td>
+      <td class="px-3 py-2.5"><div>${esc(t.itemsText)}</div>${t.customerName ? `<div class="text-xs text-slate-500">${esc(t.customerName)}</div>` : ''}${t.discount ? `<div class="text-xs text-amber-300">−${fmt(t.discount)} discount${t.loyaltyDiscount ? ` (🎁 ${fmt(t.loyaltyDiscount)} reward)` : ''}</div>` : ''}</td>
       <td class="whitespace-nowrap px-3 py-2.5"><span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full ${(METHODS[t.method] || {}).dot || 'bg-slate-500'}"></span>${esc((METHODS[t.method] || {}).label || '—')}</span></td>
       <td class="whitespace-nowrap px-3 py-2.5 text-right font-semibold">${fmt(t.total)}</td>
       <td class="whitespace-nowrap px-3 py-2.5 text-right text-amber-300">${fmt(t.commission)}</td>
@@ -1098,6 +1192,256 @@ function openItemModal(id) {
     <div class="grid grid-cols-2 gap-2"><button data-act="close-modal" class="btn-ghost">Cancel</button><button data-act="save-item" data-id="${esc(i.id)}" data-primary class="btn-primary">Save</button></div>`);
 }
 
+/* ============================== LOYALTY ============================== */
+const publicUrl = () => new URL('rewards.html', location.href.split('#')[0]).href;
+const cardLink = (key) => `${publicUrl()}#k=${encodeURIComponent(key)}`;
+const waPhone = (p) => { const d = cleanPhone(p); return d.startsWith('0') ? '20' + d.slice(1) : d; };
+function waLink(c) {
+  const shop = (S.boot && S.boot.settings && S.boot.settings.shopName) || 'Karamila';
+  const lo = c.available && c.available.length;
+  const msg = [`${shop} 💈 — كارت المكافآت بتاعك`,
+    lo ? '🎁 عندك مكافأة جاهزة في زيارتك الجاية!' : `زياراتك: ${c.progress}/${c.program.required}`,
+    `الكود السري: ${c.code}`, `تابع مكافآتك: ${cardLink(c.key)}`, '',
+    `Your ${shop} rewards card · code ${c.code}`].join('\n');
+  return `https://wa.me/${waPhone(c.phone)}?text=${encodeURIComponent(msg)}`;
+}
+function qrSvg(text, cls = 'h-44 w-44') {
+  if (typeof window.qrcode !== 'function') return `<div class="${cls} grid place-items-center rounded-xl bg-slate-900 text-xs text-slate-500">QR</div>`;
+  const q = window.qrcode(0, 'M'); q.addData(text); q.make();
+  return `<div class="${cls} overflow-hidden rounded-xl bg-white p-2" data-noi18n>${q.createSvgTag({ cellSize: 4, margin: 0, scalable: true })}</div>`;
+}
+
+function applyReward(id) {
+  const c = S.cart.customer && (customerById(S.cart.customer.id) || S.cart.customer);
+  const r = c && c.loyalty && c.loyalty.available.find((x) => x.id === id);
+  if (!r) return;
+  const t0 = cartTotals();
+  S.cart.reward = { ...r };
+  if (!rewardLine(t0.lines)) {
+    // auto-add the cheapest eligible haircut so the cashier doesn't have to hunt for it
+    const set = new Set(loyCfg().services || []);
+    const cut = ((S.boot && S.boot.catalog) || []).filter((i) => i.active && i.type === 'SERVICE' && set.has(i.id)).sort((a, b) => num(a.sort) - num(b.sort))[0];
+    if (cut) { S.cart.items.push({ id: cut.id, qty: 1 }); toast(`${cut.name} added for the reward`, 'info', 2200); }
+  }
+  const t = cartTotals();
+  if (S.cart.discount && S.cart.discount.amount > r2(t.sub - t.loyalty)) { S.cart.discount = null; toast('Discount removed — bill is now smaller than the discount.', 'warn'); }
+  renderCustomer(); renderGrid(); renderCart();
+  if (loyCfg().needsApproval && S.role !== 'MANAGER') {
+    modal(`<h3 class="mb-1 text-lg font-bold">🎁 Loyalty reward</h3>
+      <p class="mb-4 text-sm text-slate-400">${esc(rewardLabel(r))} · −${fmt(t.loyalty)}. Rewards need manager approval.</p>
+      <label class="mb-1 block text-sm font-medium text-slate-300">Manager PIN <span class="font-normal text-slate-500">(approve now)</span></label>
+      <input id="rw-pin" type="password" inputmode="numeric" autocomplete="off" class="inp mb-1" placeholder="••••••" autofocus>
+      <p class="mb-4 text-xs text-slate-500">Leave empty to send the request to the manager's dashboard. The sale will be held until approved.</p>
+      <p id="rw-err" class="mb-2 min-h-5 text-sm text-red-400"></p>
+      <div class="grid grid-cols-2 gap-2"><button data-act="close-modal" class="btn-ghost">Later</button><button data-act="confirm-reward" data-primary class="btn-primary">Approve</button></div>`);
+  } else toast(`Reward applied: −${fmt(t.loyalty)}`, 'success', 1800);
+}
+async function confirmReward(btn) {
+  const pin = $('#rw-pin').value.trim();
+  if (!pin) { closeModal(); return; }
+  const t = cartTotals();
+  btn.disabled = true; btn.textContent = 'Checking…';
+  try {
+    const tok = (await api('managerApprove', { pin, purpose: 'REWARD', amount: t.loyalty })).approvalToken;
+    S.cart.reward.approvalToken = tok; S.cart.reward.approvedAmount = t.loyalty;
+    closeModal(); renderCart(); toast('Reward approved', 'success');
+  } catch (e) { $('#rw-err').textContent = e.code === 'NETWORK' ? 'Offline — leave PIN empty to send for approval.' : e.message; btn.disabled = false; btn.textContent = 'Approve'; }
+}
+
+async function openCardModal(id) {
+  const local = customerById(id);
+  modal(`<div class="py-10 text-center text-slate-400">${ic('refresh', 'mx-auto mb-2 h-6 w-6 animate-spin')}Loading card…</div>`);
+  let c;
+  try { c = await api('loyaltyCustomer', { customerId: id }); }
+  catch (e) { modal(`<p class="mb-4 text-sm text-red-300">${esc(e.code === 'NETWORK' ? 'Needs internet to load the card.' : e.message)}</p><button data-act="close-modal" class="btn-ghost w-full">Close</button>`); return; }
+  c.id = id; S.cardInfo = c;
+  const L = c.program;
+  modal(`<div class="mb-3 flex items-center justify-between"><h3 class="text-lg font-bold">${ic('gift', 'mr-1 inline h-5 w-5 text-amber-400')} Rewards card</h3><button data-act="close-modal" class="rounded-lg p-1 text-slate-400 hover:bg-slate-700">${ic('x')}</button></div>
+    <div class="mb-3 text-sm"><b>${esc(c.name)}</b> <span class="text-slate-400">${esc(c.phone)}</span></div>
+    <div class="mb-3 rounded-2xl bg-slate-900/50 p-3">
+      <div class="mb-2 flex items-center justify-between text-sm"><span class="text-slate-300">Progress</span><b>${c.progress}/${L.required}</b></div>
+      ${progressDots(c.progress, L.required, 'h-5 w-5')}
+      <div class="mt-2 text-xs text-slate-400">${c.available.length ? `🎁 ${c.available.length} reward(s) ready` : `${c.remaining} more visit${c.remaining === 1 ? '' : 's'} to the next reward`} · Total qualifying visits: ${c.totalVisits}</div>
+    </div>
+    <div class="mb-3 flex flex-col items-center gap-2 rounded-2xl bg-slate-900/50 p-4">
+      ${qrSvg(cardLink(c.key))}
+      <div class="text-xs text-slate-400">Customer scans this with their phone camera</div>
+      <div class="mt-1 text-sm text-slate-300">Secret code <b class="font-mono text-2xl tracking-[.3em] text-amber-400" data-noi18n>${esc(c.code)}</b></div>
+    </div>
+    <div class="grid grid-cols-2 gap-2">
+      <button data-act="loy-wa" class="btn-primary !bg-emerald-600 !text-white hover:!bg-emerald-500">${ic('send', 'h-4 w-4')} WhatsApp</button>
+      <button data-act="loy-copy" class="btn-ghost">${ic('copy', 'h-4 w-4')} Copy link</button>
+    </div>
+    <p class="mt-3 text-xs text-slate-500">Send it only to the customer's own number. The code + phone (or the link) open their rewards page.</p>
+    ${S.role === 'MANAGER' ? `<button data-act="loy-reset" class="mt-3 w-full text-xs text-red-300 underline-offset-4 hover:underline">Reset code & link (if leaked)</button>` : ''}`);
+}
+
+async function loadLoyalty() {
+  if (S.role !== 'MANAGER') return;
+  S.loy.loading = true; S.loy.error = '';
+  if (S.view === 'loyalty') renderLoyalty();
+  try { S.loy.data = await api('loyaltyReport'); S.online = true; }
+  catch (e) { S.loy.error = e.message; if (e.code === 'NETWORK') S.online = false; }
+  S.loy.loading = false; updateStatus();
+  if (S.view === 'loyalty') renderLoyalty();
+}
+
+const RW_BADGE = { AVAILABLE: 'bg-amber-500/15 text-amber-300', REDEEMED: 'bg-emerald-500/15 text-emerald-300', RESERVED: 'bg-sky-500/15 text-sky-300', EXPIRED: 'bg-slate-500/20 text-slate-400', REVOKED: 'bg-red-500/15 text-red-300' };
+function renderLoyalty() {
+  const d = S.loy.data;
+  const k = d && d.kpi;
+  const L = loyCfg();
+  const tab = (t, l) => `<button data-act="loy-tab" data-t="${t}" class="whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold ${S.loy.tab === t ? 'bg-amber-500 text-slate-900' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}">${l}</button>`;
+  $('#view').innerHTML = `<div class="mx-auto max-w-7xl p-3 pb-24 lg:p-5">
+    <div class="mb-4 flex flex-wrap items-center gap-2">
+      <h1 class="mr-auto text-2xl font-extrabold tracking-tight">Loyalty program</h1>
+      <span class="rounded-full px-3 py-1 text-xs font-bold ${L.active ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}">${L.active ? 'Active' : 'Paused'}</span>
+      <button data-act="loy-reload" class="flex items-center gap-1 rounded-full bg-slate-800 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700">${ic('refresh', `h-3.5 w-3.5 ${S.loy.loading ? 'animate-spin' : ''}`)} ${d ? fmtTime(d.serverTime) : '—'}</button>
+    </div>
+    <p class="-mt-2 mb-4 text-sm text-slate-400">${L.required} qualifying visits → ${esc(rewardLabel(L))} the next haircut${L.expiryDays ? ` · valid ${L.expiryDays} days` : ''}${L.nextVisitOnly ? ' · next visit only' : ''}</p>
+    ${S.loy.error ? `<div class="mb-4 rounded-2xl bg-red-500/10 p-3 text-sm text-red-300 ring-1 ring-red-500/30">${esc(S.loy.error)}</div>` : ''}
+    ${!k ? skeleton() : `<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+      ${kpi('Enrolled customers', k.enrolled, `of ${k.customers} customers`, 'text-amber-400')}
+      ${kpi('Close to a reward', k.close, '1–2 visits away')}
+      ${kpi('Unused rewards', k.available, `${k.withRewards} customers waiting`, 'text-amber-300')}
+      ${kpi('Rewards redeemed', k.redeemed, `${k.issued} issued · ${k.expired} expired`, 'text-emerald-400')}
+      ${kpi('Loyalty discounts', fmt(k.discountTotal), 'Total given through rewards')}
+      ${kpi('Qualifying visits', k.visits, 'All time')}
+    </div>`}
+    <div class="no-scrollbar mt-6 mb-3 flex gap-1.5 overflow-x-auto">${tab('customers', 'Customers')}${tab('rewards', 'Rewards')}${tab('settings', 'Program rules')}${tab('qr', 'QR & link')}</div>
+    <div id="loy-panel">${S.loy.tab === 'settings' ? loyaltySettingsForm() : S.loy.tab === 'qr' ? loyaltyQrPanel() : !d ? skeleton() : S.loy.tab === 'rewards' ? rewardsTable(d.rewards) : `
+      <div class="mb-3 grid grid-cols-[1fr_auto] gap-2"><input id="loy-q" class="inp" placeholder="Search name or phone…" value="${esc(S.loy.q)}">
+        <button data-act="loy-export" data-k="customers" class="btn-ghost">${ic('download', 'h-4 w-4')} Excel</button></div>
+      <div id="loy-body">${loyaltyBody()}</div>`}</div>
+  </div>`;
+}
+function loyaltyFiltered() {
+  const q = normName(S.loy.q), dq = digits(S.loy.q);
+  return ((S.loy.data && S.loy.data.customers) || []).filter((c) => !q || normName(c.name).includes(q) || (dq.length >= 3 && c.phone.includes(dq)))
+    .sort((a, b) => (b.available - a.available) || (a.remaining - b.remaining) || (b.total - a.total));
+}
+function loyaltyBody() {
+  const rows = loyaltyFiltered();
+  if (!rows.length) return '<div class="rounded-2xl bg-slate-800/50 p-8 text-center text-sm text-slate-500">No customers found.</div>';
+  return `<div class="overflow-x-auto rounded-2xl ring-1 ring-white/5"><table class="w-full min-w-[640px] text-left text-sm">
+    <thead class="bg-slate-800 text-xs uppercase tracking-wider text-slate-400"><tr><th class="px-3 py-3">Customer</th><th class="px-3 py-3">Progress</th><th class="px-3 py-3 text-right">Visits</th><th class="px-3 py-3 text-right">Rewards</th><th class="px-3 py-3">Last visit</th><th class="px-3 py-3"></th></tr></thead>
+    <tbody class="divide-y divide-white/5 bg-slate-800/40">${rows.slice(0, 300).map((c) => `<tr>
+      <td class="px-3 py-2.5"><div class="font-medium">${esc(c.name)}</div><div class="text-xs text-slate-500">${esc(c.phone)}</div></td>
+      <td class="px-3 py-2.5"><div class="flex items-center gap-2">${progressDots(c.progress, (S.loy.data.program || {}).required || 5, 'h-2.5 w-2.5')}<span class="text-xs text-slate-400">${c.progress}/${(S.loy.data.program || {}).required || 5}</span></div></td>
+      <td class="px-3 py-2.5 text-right">${c.total}</td>
+      <td class="px-3 py-2.5 text-right">${c.available ? `<span class="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-bold text-amber-300">🎁 ${c.available} ready</span>` : ''} <span class="text-xs text-slate-500">${c.redeemed} used</span></td>
+      <td class="whitespace-nowrap px-3 py-2.5 text-slate-400">${c.lastVisit ? esc(fmtDay(c.lastVisit)) : '—'}</td>
+      <td class="whitespace-nowrap px-3 py-2.5 text-right"><button data-act="loy-history" data-id="${esc(c.id)}" class="rounded-lg px-2 py-1 text-xs text-slate-300 hover:bg-slate-700">History</button><button data-act="loy-card" data-id="${esc(c.id)}" class="rounded-lg p-1.5 text-slate-300 hover:bg-slate-700" title="Rewards card">${ic('qr', 'h-4 w-4')}</button></td>
+    </tr>`).join('')}</tbody></table></div>${rows.length > 300 ? '<p class="mt-2 text-xs text-slate-500">Showing first 300 — use search.</p>' : ''}`;
+}
+function rewardsTable(list, compact) {
+  if (!list.length) return '<div class="rounded-2xl bg-slate-800/50 p-8 text-center text-sm text-slate-500">No rewards yet.</div>';
+  return `${compact ? '' : `<div class="mb-2 flex justify-end gap-2"><button data-act="loy-export" data-k="visits" class="btn-ghost">${ic('download', 'h-4 w-4')} Visits</button><button data-act="loy-export" data-k="rewards" class="btn-ghost">${ic('download', 'h-4 w-4')} Rewards</button></div>`}
+  <div class="overflow-x-auto rounded-2xl ring-1 ring-white/5"><table class="w-full ${compact ? '' : 'min-w-[720px]'} text-left text-sm">
+    <thead class="bg-slate-800 text-xs uppercase tracking-wider text-slate-400"><tr>${compact ? '' : '<th class="px-3 py-3">Customer</th>'}<th class="px-3 py-3">Reward</th><th class="px-3 py-3">Issued</th><th class="px-3 py-3">Status</th><th class="px-3 py-3 text-right">Discount</th></tr></thead>
+    <tbody class="divide-y divide-white/5 bg-slate-800/40">${list.map((r) => `<tr>
+      ${compact ? '' : `<td class="px-3 py-2.5"><div class="font-medium">${esc(r.customerName)}</div><div class="text-xs text-slate-500">${esc(r.phone)}</div></td>`}
+      <td class="whitespace-nowrap px-3 py-2.5">${esc(rewardLabel(r))}</td>
+      <td class="whitespace-nowrap px-3 py-2.5 text-slate-400">${esc(fmtDay(r.issuedDate))}${r.expiresOn ? `<div class="text-[11px]">expires ${esc(fmtDay(r.expiresOn))}</div>` : ''}</td>
+      <td class="px-3 py-2.5"><span class="rounded-full px-2 py-0.5 text-[10px] font-bold ${RW_BADGE[r.status] || ''}">${esc(r.status)}</span>${r.redeemedDate ? `<div class="text-[11px] text-slate-500">${esc(fmtDay(r.redeemedDate))}</div>` : ''}${r.note ? `<div class="text-[11px] text-slate-500">${esc(r.note)}</div>` : ''}</td>
+      <td class="whitespace-nowrap px-3 py-2.5 text-right">${r.discount ? fmt(r.discount) : '—'}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function openHistoryModal(id) {
+  const d = S.loy.data; if (!d) return;
+  const c = d.customers.find((x) => x.id === id); if (!c) return;
+  const visits = d.visits.filter((v) => v.customerId === id);
+  modal(`<div class="mb-3 flex items-center justify-between"><h3 class="text-lg font-bold">${esc(c.name)}</h3><button data-act="close-modal" class="rounded-lg p-1 text-slate-400 hover:bg-slate-700">${ic('x')}</button></div>
+    <p class="mb-3 text-sm text-slate-400">${esc(c.phone)} · ${c.total} qualifying visits · ${c.progress}/${d.program.required} now</p>
+    <h4 class="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-400">Rewards</h4>
+    ${rewardsTable(d.rewards.filter((r) => r.customerId === id), true)}
+    <h4 class="mb-2 mt-4 text-xs font-semibold uppercase tracking-widest text-slate-400">Visits</h4>
+    <div class="divide-y divide-white/5 overflow-hidden rounded-2xl bg-slate-900/40">${visits.map((v) => `<div class="flex items-center gap-2 px-3 py-2 text-sm ${v.status === 'REVERSED' ? 'opacity-50' : ''}">
+      <span class="w-16 text-slate-400">${esc(fmtDay(v.date))}</span><span class="flex-1 truncate text-xs text-slate-500">${esc(v.ticketId)}${v.note ? ' · ' + esc(v.note) : ''}</span>
+      <span class="rounded-full px-2 py-0.5 text-[10px] font-bold ${v.status === 'VALID' ? (v.rewardId ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300') : 'bg-red-500/15 text-red-300'}">${v.status === 'VALID' ? (v.rewardId ? 'USED FOR REWARD' : 'COUNTING') : 'CANCELLED'}</span></div>`).join('') || '<p class="p-4 text-center text-sm text-slate-500">No visits yet.</p>'}</div>`, { wide: true });
+}
+function loyaltySettingsForm() {
+  const L = loyCfg();
+  const svc = ((S.boot && S.boot.catalog) || []).filter((i) => i.type === 'SERVICE');
+  const prods = ((S.boot && S.boot.catalog) || []).filter((i) => i.type === 'PRODUCT');
+  const set = new Set(L.services || []);
+  const chk = (id, label, on, hint) => `<label class="flex items-start gap-3 rounded-xl bg-slate-900/40 p-3"><input id="${id}" type="checkbox" class="mt-0.5 h-5 w-5 shrink-0 accent-amber-500" ${on ? 'checked' : ''}><span><span class="block text-sm font-medium">${label}</span>${hint ? `<span class="block text-xs text-slate-500">${hint}</span>` : ''}</span></label>`;
+  return `<div class="card space-y-4">
+    ${chk('loy-active', 'Program active', L.active, 'Paused = visits are not counted and no new rewards are issued. Rewards already earned can still be used.')}
+    <div class="grid gap-3 sm:grid-cols-3">
+      <label class="text-sm text-slate-300">Visits needed<input id="loy-visits" type="number" min="1" max="50" class="inp mt-1" value="${num(L.required)}"></label>
+      <label class="text-sm text-slate-300">Reward type<select id="loy-type" class="inp mt-1"><option value="PERCENT" ${L.type === 'PERCENT' ? 'selected' : ''}>Percentage off</option><option value="FIXED" ${L.type === 'FIXED' ? 'selected' : ''}>Fixed amount off</option></select></label>
+      <label class="text-sm text-slate-300">Reward value (<span id="loy-unit">${L.type === 'FIXED' ? esc(cur()) : '%'}</span>)<input id="loy-value" type="number" min="1" class="inp mt-1" value="${num(L.value)}"></label>
+    </div>
+    <div><div class="mb-2 text-sm font-medium text-slate-300">Eligible services <span class="font-normal text-slate-500">(earn visits & get the discount)</span></div>
+      <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">${svc.map((i) => `<label class="flex items-center gap-2 rounded-xl bg-slate-900/40 px-3 py-2 text-sm ${i.active ? '' : 'opacity-50'}"><input type="checkbox" data-loy-svc="${esc(i.id)}" class="h-4 w-4 accent-amber-500" ${set.has(i.id) ? 'checked' : ''}> <span class="flex-1">${esc(i.name)}</span><span class="text-xs text-slate-500">${fmt(i.price)}</span></label>`).join('')}</div>
+      ${L.servicesAuto ? '<p class="mt-1 text-xs text-slate-500">Auto-selected haircut services. Save to lock your choice.</p>' : ''}</div>
+    <div class="grid gap-2 sm:grid-cols-2">
+      ${chk('loy-products', 'Product purchases count as visits', L.countProducts, `Off by default${prods.length ? ` (${prods.length} products)` : ''}.`)}
+      ${chk('loy-next', 'Reward valid for the next visit only', L.nextVisitOnly, 'If the customer comes for a haircut and the reward isn\'t used, it is lost.')}
+      ${chk('loy-approval', 'Cashier needs manager approval to redeem', L.needsApproval, 'Same flow as discounts: manager PIN now, or the sale waits on the dashboard.')}
+      ${chk('loy-redeemcounts', 'The discounted visit also counts toward the next reward', L.redeemCounts, 'Off = the free/discounted haircut starts the new cycle at 0.')}
+    </div>
+    <label class="block text-sm text-slate-300 sm:w-1/3">Reward expires after (days)<input id="loy-expiry" type="number" min="0" class="inp mt-1" value="${num(L.expiryDays)}"><span class="text-xs text-slate-500">0 = never expires</span></label>
+    <button data-act="loy-save" class="btn-primary">Save program rules</button>
+    <p class="text-xs text-slate-500">Changes apply to new rewards. Rewards already issued keep their value.</p>
+  </div>`;
+}
+async function saveLoyaltySettings(btn) {
+  const services = [...document.querySelectorAll('[data-loy-svc]')].filter((x) => x.checked).map((x) => x.dataset.loySvc);
+  if (!services.length) return toast('Pick at least one eligible service', 'warn');
+  await busy(btn, async () => {
+    try {
+      const r = await api('saveSettings', { loyaltyActive: $('#loy-active').checked, loyaltyVisits: $('#loy-visits').value, loyaltyRewardType: $('#loy-type').value,
+        loyaltyRewardValue: $('#loy-value').value, loyaltyServices: services, loyaltyCountProducts: $('#loy-products').checked, loyaltyNextVisitOnly: $('#loy-next').checked,
+        loyaltyNeedsApproval: $('#loy-approval').checked, loyaltyRedeemCounts: $('#loy-redeemcounts').checked, loyaltyExpiryDays: $('#loy-expiry').value });
+      S.boot.settings = r.settings; LS.set('boot', S.boot);
+      toast('Program rules saved', 'success');
+      refreshCustomers(); loadLoyalty();
+    } catch (e) { toast(e.message, 'error', 6000); }
+  });
+  renderLoyalty();
+}
+function loyaltyQrPanel() {
+  return `<div class="grid gap-4 md:grid-cols-[auto_1fr]">
+    <div class="card flex flex-col items-center gap-3">${qrSvg(publicUrl(), 'h-56 w-56')}<div class="text-sm font-semibold" data-noi18n>My Rewards — مكافآتي</div></div>
+    <div class="card space-y-3">
+      <h2 class="font-bold">Public rewards page</h2>
+      <p class="text-sm text-slate-400">Print this QR for the mirror or the cashier desk. Customers scan it, type their phone number and the 6-digit code from their WhatsApp card, and see their progress. Nobody can see anything with a phone number alone.</p>
+      <div class="break-all rounded-xl bg-slate-900/60 p-3 font-mono text-xs text-slate-300" data-noi18n>${esc(publicUrl())}</div>
+      <div class="flex flex-wrap gap-2"><button data-act="loy-print" class="btn-primary">${ic('print', 'h-4 w-4')} Print poster</button><button data-act="loy-copy-public" class="btn-ghost">${ic('copy', 'h-4 w-4')} Copy link</button></div>
+      <p class="text-xs text-slate-500">Each customer's personal card (QR + code) is in POS ▸ customer ▸ Card, or in the Customers tab here.</p>
+    </div></div>`;
+}
+function printPoster() {
+  const shop = esc((S.boot && S.boot.settings && S.boot.settings.shopName) || 'Karamila');
+  const L = loyCfg();
+  const reward = L.type === 'FIXED' ? `${money(L.value)} ${esc(cur())}` : `${num(L.value)}%`;
+  const w = window.open('', '_blank');
+  if (!w) return toast('Allow pop-ups to print', 'warn');
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${shop} — Rewards</title><style>
+    body{font-family:system-ui,"Segoe UI",Tahoma,sans-serif;text-align:center;margin:0;padding:40px;color:#0f172a}
+    .b{border:6px solid #f59e0b;border-radius:32px;padding:36px;max-width:520px;margin:auto}
+    h1{font-size:44px;margin:0}h2{font-size:28px;margin:8px 0 0}p{font-size:20px;margin:10px 0}.qr{width:300px;height:300px;margin:24px auto}.qr svg{width:100%;height:100%}
+    .s{color:#64748b;font-size:14px;word-break:break-all}</style></head><body><div class="b">
+    <h1>${shop} 💈</h1><h2 dir="rtl">مكافآتي · My Rewards</h2>
+    <p dir="rtl"><b>${L.required}</b> زيارات = <b>${reward}</b> خصم على الحلاقة الجاية</p>
+    <p>${L.required} visits = <b>${reward} off</b> your next haircut</p>
+    <div class="qr">${qrSvg(publicUrl(), '').replace(/^<div[^>]*>|<\/div>$/g, '')}</div>
+    <p dir="rtl">امسح الكود بكاميرا الموبايل</p><p>Scan with your phone camera</p><div class="s">${esc(publicUrl())}</div>
+    </div><script>setTimeout(()=>print(),300)<\/script></body></html>`);
+  w.document.close();
+}
+function exportLoyalty(kind) {
+  const d = S.loy.data; if (!d) return;
+  const day = todayStr();
+  if (kind === 'customers') downloadCSV(`karamila-loyalty-customers-${day}.csv`, [['Customer', 'Phone', 'Qualifying visits', 'Progress', 'Required', 'Remaining', 'Rewards ready', 'Rewards used', 'Last visit'],
+    ...loyaltyFiltered().map((c) => [c.name, c.phone, c.total, c.progress, d.program.required, c.remaining, c.available, c.redeemed, c.lastVisit])]);
+  if (kind === 'rewards') downloadCSV(`karamila-loyalty-rewards-${day}.csv`, [['Reward ID', 'Customer', 'Phone', 'Type', 'Value', 'Status', 'Issued', 'Expires', 'Redeemed', 'Ticket', 'Discount', 'Note'],
+    ...d.rewards.map((r) => [r.id, r.customerName, r.phone, r.type, r.value, r.status, r.issuedDate, r.expiresOn, r.redeemedDate, r.ticketId, r.discount, r.note])]);
+  if (kind === 'visits') downloadCSV(`karamila-loyalty-visits-${day}.csv`, [['Date', 'Customer', 'Ticket', 'Status', 'Reward', 'Note'],
+    ...d.visits.map((v) => [v.date, v.customerName, v.ticketId, v.status, v.rewardId, v.note])]);
+}
+
 /* ------------------------------ modals ------------------------------ */
 let confirmResolver = null;
 function modal(html, opts = {}) {
@@ -1192,7 +1536,8 @@ const ACT = {
   'disc-reason': (el) => { $('#disc-reason').value = el.dataset.v; },
   'apply-discount': applyDiscount,
   'remove-discount': () => { S.cart.discount = null; renderCart(); },
-  'pick-customer': (el) => { const c = customerById(el.dataset.id); if (!c) return; S.cart.customer = { ...c }; S.custQuery = ''; renderCustomer(); },
+  'pick-customer': (el) => { const c = customerById(el.dataset.id); if (!c) return; S.cart.customer = { ...c }; S.cart.reward = null; S.custQuery = ''; renderCustomer(); renderCart();
+    const lo = c.loyalty; if (lo && lo.available && lo.available.length) toast(`🎁 ${c.name} has a reward ready: ${rewardLabel(lo.available[0])}`, 'success', 5000); },
   'add-customer': () => {
     const name = $('#new-name').value.trim();
     const phone = cleanPhone($('#new-phone').value);
@@ -1203,7 +1548,25 @@ const ACT = {
     else S.cart.customer = { id: uid('C'), name, phone, isNew: true, visits: 0 };
     S.custQuery = ''; renderCustomer();
   },
-  'clear-customer': () => { S.cart.customer = null; renderCustomer(); },
+  'clear-customer': () => { S.cart.customer = null; S.cart.reward = null; renderCustomer(); renderCart(); },
+  'apply-reward': (el) => applyReward(el.dataset.id),
+  'remove-reward': () => { S.cart.reward = null; renderCustomer(); renderCart(); },
+  'confirm-reward': confirmReward,
+  'loy-card': (el) => openCardModal(el.dataset.id),
+  'loy-wa': () => { const c = S.cardInfo; if (c) window.open(waLink(c), '_blank', 'noopener'); },
+  'loy-copy': async () => { const c = S.cardInfo; if (!c) return; try { await navigator.clipboard.writeText(cardLink(c.key)); toast('Link copied', 'success'); } catch (e) { toast(cardLink(c.key), 'info', 8000); } },
+  'loy-reset': async (el) => {
+    const c = S.cardInfo; if (!c) return;
+    if (!(await confirmModal('Create a new code and link? The old ones stop working immediately.', 'Reset'))) return;
+    try { await api('loyaltyResetKey', { customerId: c.id }); toast('New code created', 'success'); openCardModal(c.id); } catch (e) { toast(e.message, 'error'); }
+  },
+  'loy-tab': (el) => { S.loy.tab = el.dataset.t; renderLoyalty(); },
+  'loy-reload': () => loadLoyalty(),
+  'loy-history': (el) => openHistoryModal(el.dataset.id),
+  'loy-save': saveLoyaltySettings,
+  'loy-print': printPoster,
+  'loy-copy-public': async () => { try { await navigator.clipboard.writeText(publicUrl()); toast('Link copied', 'success'); } catch (e) { toast(publicUrl(), 'info', 8000); } },
+  'loy-export': (el) => exportLoyalty(el.dataset.k),
   'edit-notes': openNotesModal,
   'save-notes': () => {
     const c = S.cart.customer;
@@ -1311,6 +1674,8 @@ document.addEventListener('click', (e) => {
 document.addEventListener('input', (e) => {
   const id = e.target.id;
   if (id === 'cust-q') { S.custQuery = e.target.value; renderCustDropdown(); }
+  else if (id === 'loy-q') { S.loy.q = e.target.value; const t = $('#loy-body'); if (t && S.loy.data) t.innerHTML = loyaltyBody(); }
+  else if (id === 'loy-type') { const u = $('#loy-unit'); if (u) u.textContent = e.target.value === 'FIXED' ? cur() : '%'; }
   else if (id === 'log-q') { S.logFilter.q = e.target.value; const t = $('#log-table'); if (t && S.dash.data) t.innerHTML = logBody(); }
 });
 document.addEventListener('change', (e) => {

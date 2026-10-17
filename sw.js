@@ -1,8 +1,8 @@
 /* Karamila POS — Service Worker
  * Bump VERSION on every deploy so phones pick up the new app shell. */
-const VERSION = 'karamila-v1.1.0';
+const VERSION = 'karamila-v1.2.0';
 const SHELL = [
-  './', './index.html', './styles.css', './app.js', './config.js', './i18n.js', './manifest.webmanifest',
+  './', './index.html', './styles.css', './app.js', './config.js', './i18n.js', './rewards.html', './rewards.js', './manifest.webmanifest',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
 ];
 
@@ -27,12 +27,13 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
 
   // Navigations: network first, fall back to cached shell (works offline).
+  // Each page is cached under its own path (POS = index.html, customer page = rewards.html).
   if (req.mode === 'navigate') {
+    const page = /\/rewards\.html$/.test(url.pathname) ? './rewards.html' : './index.html';
     e.respondWith(fetch(req).then((res) => {
-      const copy = res.clone();
-      caches.open(VERSION).then((c) => c.put('./index.html', copy));
+      if (res.ok) { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(page, copy)); }
       return res;
-    }).catch(() => caches.match('./index.html')));
+    }).catch(() => caches.match(page)));
     return;
   }
 
