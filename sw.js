@@ -1,8 +1,8 @@
 /* Karamila POS — Service Worker
  * Bump VERSION on every deploy so phones pick up the new app shell. */
-const VERSION = 'karamila-v1.0.0';
+const VERSION = 'karamila-v1.1.0';
 const SHELL = [
-  './', './index.html', './styles.css', './app.js', './config.js', './manifest.webmanifest',
+  './', './index.html', './styles.css', './app.js', './config.js', './i18n.js', './manifest.webmanifest',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
 ];
 
