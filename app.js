@@ -7,7 +7,7 @@
 
 const CFG = Object.assign({ API_URL: '', TIME_ZONE: 'Africa/Cairo', SYNC_SECONDS: 15 }, window.KARAMILA_CONFIG || {});
 const TZ = CFG.TIME_ZONE;
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 const METHODS = {
   CASH:          { label: 'Cash',          short: 'Cash',     btn: 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-400' },
@@ -1059,17 +1059,22 @@ function renderPayroll() {
   $('#view').innerHTML = `<div class="mx-auto max-w-7xl p-3 pb-24 lg:p-5">${rangeBar('Payroll')}
   ${!d ? skeleton() : `
     <div class="mb-4 grid grid-cols-3 gap-3">${kpi('Total sales', fmt(T.sales), `${T.tickets} tickets`, 'text-amber-400')}${kpi('Barbers earned', fmt(T.commission))}${kpi('Shop net cut', fmt(T.shopCut), 'before expenses', 'text-emerald-400')}</div>
-    <div class="mb-2 flex justify-end"><button data-act="export-payroll" class="btn-ghost">${ic('download', 'h-4 w-4')} Export CSV</button></div>
+    <div class="mb-2 flex flex-wrap justify-end gap-2"><button data-act="reset-barber" data-id="ALL" class="btn-ghost text-red-300">${ic('refresh', 'h-4 w-4')} Reset all barbers</button><button data-act="export-payroll" class="btn-ghost">${ic('download', 'h-4 w-4')} Export CSV</button></div>
     <div class="overflow-x-auto rounded-2xl ring-1 ring-white/5"><table class="w-full min-w-[720px] text-left text-sm">
-      <thead class="bg-slate-800 text-xs uppercase tracking-wider text-slate-400"><tr><th class="px-3 py-3">Barber</th><th class="px-3 py-3 text-right">Tickets</th><th class="px-3 py-3 text-right">Services</th><th class="px-3 py-3 text-right">Products</th><th class="px-3 py-3 text-right">Total sales</th><th class="px-3 py-3 text-right">Commission</th><th class="px-3 py-3 text-right">Shop cut</th></tr></thead>
+      <thead class="bg-slate-800 text-xs uppercase tracking-wider text-slate-400"><tr><th class="px-3 py-3">Barber</th><th class="px-3 py-3 text-right">Tickets</th><th class="px-3 py-3 text-right">Services</th><th class="px-3 py-3 text-right">Products</th><th class="px-3 py-3 text-right">Total sales</th><th class="px-3 py-3 text-right">Commission</th><th class="px-3 py-3 text-right">Shop cut</th><th class="px-3 py-3"></th></tr></thead>
       <tbody class="divide-y divide-white/5 bg-slate-800/40">${rows.map((p) => `<tr>
-        <td class="px-3 py-3"><div class="flex items-center gap-2">${avatar(barberById(p.barberId) || p, 'h-8 w-8 text-xs')}<div class="min-w-0"><div class="font-medium">${esc(p.name)}</div><div class="mt-1 h-1.5 w-28 rounded-full bg-slate-700"><div class="h-1.5 rounded-full bg-amber-500" style="width:${Math.round((p.sales / max) * 100)}%"></div></div></div></div></td>
+        <td class="px-3 py-3"><div class="flex items-center gap-2">${avatar(barberById(p.barberId) || p, 'h-8 w-8 text-xs')}<div class="min-w-0"><div class="font-medium">${esc(p.name)}</div>${p.resetAt ? `<div class="text-[11px] text-slate-500">Reset ${esc(dfDay.format(new Date(p.resetAt)))} ${esc(fmtTime(p.resetAt))}</div>` : ''}<div class="mt-1 h-1.5 w-28 rounded-full bg-slate-700"><div class="h-1.5 rounded-full bg-amber-500" style="width:${Math.round((p.sales / max) * 100)}%"></div></div></div></div></td>
         <td class="px-3 py-3 text-right">${p.tickets}</td><td class="px-3 py-3 text-right">${fmt(p.services)}</td><td class="px-3 py-3 text-right">${fmt(p.products)}</td>
-        <td class="px-3 py-3 text-right font-semibold">${fmt(p.sales)}</td><td class="px-3 py-3 text-right font-bold text-amber-400">${fmt(p.commission)}</td><td class="px-3 py-3 text-right text-emerald-400">${fmt(p.shopCut)}</td></tr>`).join('')}
+        <td class="px-3 py-3 text-right font-semibold">${fmt(p.sales)}</td><td class="px-3 py-3 text-right font-bold text-amber-400">${fmt(p.commission)}</td><td class="px-3 py-3 text-right text-emerald-400">${fmt(p.shopCut)}</td><td class="px-3 py-3 text-right"><button data-act="reset-barber" data-id="${esc(p.barberId)}" class="rounded-lg px-2 py-1 text-xs font-semibold text-red-300 hover:bg-red-500/20">Reset to zero</button></td></tr>`).join('')}
       </tbody>
-      <tfoot class="bg-slate-800 font-bold"><tr><td class="px-3 py-3">Total</td><td class="px-3 py-3 text-right">${T.tickets}</td><td class="px-3 py-3 text-right">${fmt(T.services)}</td><td class="px-3 py-3 text-right">${fmt(T.products)}</td><td class="px-3 py-3 text-right">${fmt(T.sales)}</td><td class="px-3 py-3 text-right text-amber-400">${fmt(T.commission)}</td><td class="px-3 py-3 text-right text-emerald-400">${fmt(T.shopCut)}</td></tr></tfoot>
+      <tfoot class="bg-slate-800 font-bold"><tr><td class="px-3 py-3">Total</td><td class="px-3 py-3 text-right">${T.tickets}</td><td class="px-3 py-3 text-right">${fmt(T.services)}</td><td class="px-3 py-3 text-right">${fmt(T.products)}</td><td class="px-3 py-3 text-right">${fmt(T.sales)}</td><td class="px-3 py-3 text-right text-amber-400">${fmt(T.commission)}</td><td class="px-3 py-3 text-right text-emerald-400">${fmt(T.shopCut)}</td><td></td></tr></tfoot>
     </table></div>
-    <p class="mt-3 text-xs text-slate-500">Commission is locked at sale time using the barber's rate then (default ${num(S.boot.settings.svcPct)}% services · ${num(S.boot.settings.prodPct)}% products). Discounts reduce commission proportionally; voided invoices are excluded.</p>`}
+    <p class="mt-3 text-xs text-slate-500">Commission is locked at sale time using the barber's rate then (default ${num(S.boot.settings.svcPct)}% services · ${num(S.boot.settings.prodPct)}% products). Discounts reduce commission proportionally; voided invoices are excluded.</p>
+    <p class="mt-1 text-xs text-slate-500">Reset = the barber starts from zero in Log & Payroll (e.g. after paying him). Nothing is deleted: every invoice stays in the Google Sheet, and shop revenue & profit don't change.</p>
+    ${(d.settlements || []).length ? `<h2 class="mb-2 mt-6 text-sm font-semibold uppercase tracking-widest text-slate-400">Reset history</h2>
+    <div class="divide-y divide-white/5 overflow-hidden rounded-2xl bg-slate-800/50 ring-1 ring-white/5">${d.settlements.map((x) => `<div class="flex items-center gap-3 px-4 py-2.5 text-sm">
+      <div class="min-w-0 flex-1"><div class="font-medium">${esc(x.barberName)}</div><div class="text-xs text-slate-500">${esc(dfDay.format(new Date(x.ts)))} ${esc(fmtTime(x.ts))} · ${x.tickets} tickets · ${fmt(x.sales)}</div></div>
+      <b class="text-amber-400">${fmt(x.commission)}</b></div>`).join('')}</div>` : ''}`}
   </div>`;
 }
 
@@ -1587,6 +1592,20 @@ const ACT = {
   range: (el) => { S.dash.range = el.dataset.r; LS.set('dashRange', S.dash.range); if (S.dash.range !== 'custom') loadDash(); else rerenderMgr(); },
   'apply-custom': () => { S.dash.from = $('#r-from').value; S.dash.to = $('#r-to').value; if (S.dash.to < S.dash.from) return toast('End date is before start date', 'warn'); loadDash(); },
   'reload-dash': () => loadDash(),
+  'reset-barber': async (el) => {
+    const all = el.dataset.id === 'ALL';
+    const p = !all && ((S.dash.data && S.dash.data.payroll) || []).find((x) => x.barberId === el.dataset.id);
+    const msg = all ? 'Reset ALL barbers to zero? Their Log & Payroll start again from now. Invoices stay saved in the Google Sheet.'
+      : `Reset ${p ? p.name : 'this barber'} to zero? Log & Payroll start again from now. Invoices stay saved in the Google Sheet.`;
+    if (!(await confirmModal(msg, 'Reset to zero'))) return;
+    closeModal();
+    try {
+      const r = await api('resetBarbers', all ? { all: true } : { barberId: el.dataset.id });
+      const paid = r.settlements.reduce((a, x) => a + x.commission, 0);
+      toast(`Reset done · commission ${fmt(paid)}`, 'success', 4000);
+      reloadBoot().catch(() => {}); loadDash(true);
+    } catch (e) { toast(e.message, 'error'); }
+  },
   decide: async (el) => {
     const ok = el.dataset.d === 'APPROVE';
     await busy(el, async () => {

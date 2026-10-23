@@ -163,6 +163,10 @@
     'Reward value is zero for this service.': 'قيمة المكافأة صفر للخدمة دي.', 'Required visits must be 1–50.': 'عدد الزيارات لازم من 1 لـ 50.',
     'Reward percentage must be 1–100%.': 'نسبة المكافأة لازم من 1 لـ 100%.', 'Enter a valid reward amount.': 'اكتب قيمة مكافأة صحيحة.',
     'Expiry must be 0–3650 days.': 'مدة الصلاحية لازم من 0 لـ 3650 يوم.', 'Customer not found.': 'العميل مش موجود.',
+    // barber reset
+    'Reset all barbers': 'تصفير كل الحلاقين', 'Reset to zero': 'تصفير', 'Reset history': 'سجل التصفير', 'Barber not found.': 'الحلاق مش موجود.',
+    'Reset ALL barbers to zero? Their Log & Payroll start again from now. Invoices stay saved in the Google Sheet.': 'تصفير كل الحلاقين؟ السجل والمرتبات هيبدأوا من الصفر من دلوقتي. الفواتير هتفضل محفوظة في الشيت.',
+    "Reset = the barber starts from zero in Log & Payroll (e.g. after paying him). Nothing is deleted: every invoice stays in the Google Sheet, and shop revenue & profit don't change.": 'التصفير = الحلاق يبدأ من الصفر في السجل والمرتبات (مثلًا بعد ما تقبّضه). مفيش حاجة بتتمسح: كل الفواتير بتفضل في جوجل شيت، وإيراد وربح المحل مش بيتغيروا.',
   };
 
   var MONTHS = { Jan: 'يناير', Feb: 'فبراير', Mar: 'مارس', Apr: 'أبريل', May: 'مايو', Jun: 'يونيو', Jul: 'يوليو', Aug: 'أغسطس', Sep: 'سبتمبر', Oct: 'أكتوبر', Nov: 'نوفمبر', Dec: 'ديسمبر' };
@@ -252,6 +256,9 @@
     [/^🎁 (.+) has a reward ready: (.+)$/, function (m) { return '🎁 ' + m[1] + ' عنده مكافأة جاهزة: ' + tr(m[2]); }],
     [/^Loyalty reward not applied: (.+?) The sale was sent to the manager for approval\.$/, function (m) { return 'المكافأة متطبقتش: ' + tr(m[1]) + ' الفاتورة راحت للمدير للموافقة.'; }],
     [/^walk-in$/, function () { return 'زبون عابر'; }],
+    [/^Reset (.+) to zero\? Log & Payroll start again from now\. Invoices stay saved in the Google Sheet\.$/, function (m) { return 'تصفير ' + m[1] + '؟ السجل والمرتبات هيبدأوا من الصفر من دلوقتي. الفواتير هتفضل محفوظة في الشيت.'; }],
+    [/^Reset done · commission (.+)$/, function (m) { return 'تم التصفير · العمولة ' + finish(m[1]); }],
+    [/^Reset (\d{1,2} [A-Za-z]{3}) (\d{2}:\d{2})$/, function (m) { return 'اتصفّر ' + finish(m[1]) + ' ' + m[2]; }],
     [/^v(\d+\.\d+\.\d+)(.*)$/, function (m) { return 'v' + m[1] + m[2]; }],
   ];
 
