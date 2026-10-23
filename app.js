@@ -7,7 +7,7 @@
 
 const CFG = Object.assign({ API_URL: '', TIME_ZONE: 'Africa/Cairo', SYNC_SECONDS: 15 }, window.KARAMILA_CONFIG || {});
 const TZ = CFG.TIME_ZONE;
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 
 const METHODS = {
   CASH:          { label: 'Cash',          short: 'Cash',     btn: 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-400' },

@@ -10,7 +10,25 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Karamila">
-  <link rel="manifest" href="manifest.webmanifest">
+  <script>
+    /* Home-screen install: on Android 9 and older, Chrome's "installed app" (WebAPK) crashes
+       ("Karamila has stopped"). There we skip the manifest so "Add to Home screen" makes a plain
+       shortcut that opens in Chrome and works. Real Android version comes from userAgentData
+       because Chrome's user-agent string always says "Android 10". */
+    (function () {
+      function add() { var l = document.createElement('link'); l.rel = 'manifest'; l.href = 'manifest.webmanifest'; document.head.appendChild(l); }
+      function decide(ver) { var m = /^(\d+)/.exec(ver || ''); if (m && +m[1] > 0 && +m[1] < 10) return; add(); }
+      try {
+        var ua = navigator.userAgentData;
+        if (ua && /android/i.test(ua.platform || '') && ua.getHighEntropyValues) {
+          ua.getHighEntropyValues(['platformVersion']).then(function (v) { decide(v.platformVersion); }, add);
+          return;
+        }
+        var m = /Android (\d+)/.exec(navigator.userAgent);
+        decide(m ? m[1] : '');
+      } catch (e) { add(); }
+    })();
+  </script>
   <link rel="icon" href="icons/app-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="styles.css">
